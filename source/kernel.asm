@@ -1,0 +1,832 @@
+BITS 16
+ORG 0x7E00
+
+; VARIABLES ;
+rows dw 0
+columns dw 0
+color db 0
+color_data db 0x00
+background_color db 0
+current_color db 0x07
+current_page dw 0
+pointer dw 0
+
+; COLORS ;
+COLOR_BLACK equ 0x00
+COLOR_BLUE equ 0x01
+COLOR_GREEN equ 0x02
+COLOR_YELLOW equ 0x0E
+COLOR_WHITE equ 0x0F
+COLOR_GRAY equ 0x07
+
+temp_string: times 32 db 0
+buffer: times 32 db 0
+
+start_kernel:
+    mov ax, 0x0000
+    mov ds, ax
+    mov es, ax
+
+    call return_screen_dimension
+    call clear_screen
+    
+    jmp start_screen
+
+
+; PAGES ;
+start_screen:
+    mov byte [color], COLOR_GRAY
+    mov byte [background_color], COLOR_BLACK
+
+    mov dh, 0
+    call create_line
+
+    mov ax, [rows]
+    dec ax
+    mov dh, al
+    call create_line
+
+    ; Title
+    call print_title
+
+    ; Welcome Text
+    mov byte [color], COLOR_GRAY
+    mov dh, 10
+
+    mov si, WELCOME
+    call get_centered_x_offset
+
+    call set_cursor_position
+    call print_string
+
+
+    mov dh, 15
+
+    mov si, START
+    call get_centered_x_offset
+
+    call set_cursor_position
+    mov byte [color], 0x03
+    call print_string
+
+    mov ah, 0x00
+    int 0x16
+
+    call clear_screen
+    jmp shell_screen
+
+shell_screen:
+    mov ax, SHELL
+    mov [current_page], ax
+    call top_bar
+
+    mov dh, 2
+    mov dl, 3
+    call set_cursor_position
+
+    jmp .loop
+.loop:
+    mov byte [color], 0x07
+    call set_cursor_position
+    mov si, COMMAND_INPUT
+    call print_string
+
+    call input
+
+    add dh, 1
+
+    cmp dh, 23
+    jg .reset_screen
+
+    call set_cursor_position
+
+    jmp .loop
+.reset_screen:
+    mov ax, SHELL
+    mov [current_page], ax
+
+    call clear_screen
+    call top_bar
+    mov dh, 2
+    mov dl, 3
+    call set_cursor_position
+    jmp .loop
+
+top_bar:
+    push dx
+
+    mov byte [color], COLOR_GRAY
+    mov dh, 0
+    call create_line
+
+    mov byte [color], COLOR_BLACK
+    mov byte [background_color], COLOR_GRAY
+
+    mov si, [current_page]
+    call get_centered_x_offset
+    mov dh, 0
+    call set_cursor_position
+
+    call print_string
+
+    mov byte [background_color], COLOR_BLACK
+
+    pop dx
+    mov dl, 3
+    call set_cursor_position
+
+    ret
+
+editor_screen:
+    call clear_screen
+
+    mov ax, EDITOR
+    mov [current_page], ax
+    call top_bar
+
+    call .create_lines
+
+    mov byte [color], 0x07
+    mov dl, 5
+    mov dh, 1
+    call set_cursor_position
+
+    jmp .editor_loop
+.editor_loop:
+    call .input
+
+    jmp .editor_loop
+.input:
+.loop:
+    mov ah, 0x00
+    int 0x16            ; AL = CHAR
+
+    cmp al, 13          ; ENTER
+    je .done
+
+    cmp al, 8           ; BACKSPACE
+    je .backspace
+
+    cmp ah, 0x48
+    je .move_up
+
+    cmp ah, 0x50
+    je .move_down
+
+    cmp ah, 0x4B
+    je .move_left
+
+    cmp ah, 0x4D
+    je .move_right
+
+    ; Screen Echo
+    mov ah, 0x0E
+    int 0x10
+    jmp .loop
+.move_up:
+    dec dh
+    call set_cursor_position
+
+    jmp .loop
+.move_down:
+    inc dh
+    call set_cursor_position
+
+    jmp .loop
+.move_left:
+    call get_cursor_position
+    cmp dl, 5
+    jbe .loop
+
+    dec dl
+    call set_cursor_position
+
+    jmp .loop
+.move_right:
+    jbe .loop
+
+    inc dl
+    call set_cursor_position
+
+    jmp .loop
+.backspace:
+    call get_cursor_position
+
+    cmp dl, 5
+    jbe .loop
+
+    mov ah, 0x0E
+    mov al, 8
+    int 0x10      ; Move the cursor to left (VIDEO INTERRUPT)
+
+    mov al, ' '
+    int 0x10      ; Delete with SPACE
+
+    mov al, 8
+    int 0x10      ; Move the cursor to left (VIDEO INTERRUPT)
+    jmp .loop
+.done:
+    mov dl, 5
+    inc dh
+    call set_cursor_position
+.finish:
+    ret 
+.create_lines:
+    mov ax, 1
+
+    mov cx, [rows]
+    dec cx
+
+    mov dh, 1
+    mov dl, 0
+
+    mov byte [color], 0x0A
+.iteration:
+    push ax
+    push cx
+
+    call set_cursor_position
+
+    mov bp, sp
+    mov ax, [bp+2]
+
+    call print_numbers
+
+    mov dl, 3
+    call set_cursor_position
+
+    mov si, EDITOR_LINE
+    call print_string
+
+    mov dl, 0
+    call set_cursor_position
+
+    pop cx
+    pop ax
+
+    inc ax
+    inc dh
+
+    cmp dh, 25
+    je .editor_done
+
+    loop .iteration
+.editor_done:
+    ret
+
+; FUNCTIONS ;
+get_cursor_position:
+    mov ah, 0x03
+    mov bh, 0
+    int 0x10
+
+    ret
+
+print_numbers:
+    pusha
+
+    cmp ax, 0
+    je .zero
+
+    mov bx, 10 ; BX = 10
+    xor cx, cx ; CX = Number of Digits
+.divide_loop:
+    xor dx, dx ; DX = 0
+    div bx     ; AX = AX / 10, DX = rest
+
+    push dx    ; Save Digit
+    inc cx
+    
+    test ax, ax
+    jnz .divide_loop
+.print_loop:
+    pop ax     ; DX = Digit
+    add al, '0' ; Convert to ASCII
+
+    push cx
+    mov ah, 0x09
+    mov bh, 0
+    mov bl, [color]
+    mov cx, 1
+    int 0x10
+    pop cx
+
+    push cx
+    mov ah, 0x03
+    xor bh, bh
+    int 0x10
+    
+    inc dl
+    mov ah, 0x02
+    int 0x10
+    pop cx
+
+    loop .print_loop
+    jmp .done
+.zero:
+    mov al, '0'
+    mov ah, 0x09
+    mov bh, 0
+    mov bl, [color]
+    mov cx, 1
+    int 0x10
+.done:
+    popa
+    ret
+
+check_string:
+.loop:
+    mov al, [si] ; CHAR_A
+    mov bl, [di] ; CHAR_B
+
+    cmp al, bl          ; CHARS Comparison
+    jne .not_equal      ; if CHAR_A != CHAR_B: Jump to .not_equal
+
+    test al, al         ; Check if end string
+    jz .equal
+    
+    inc si
+    inc di
+    jmp .loop
+.equal:
+    xor ax, ax          ; ZF=1 (AX=0)
+    ret
+.not_equal:
+    clc                 ; Clear the Carry
+        
+    mov al, 1       ; ZF=0
+    test al, al
+    ret
+
+parse_hex_byte:
+    mov al, [temp_string]
+    call hex_char_to_val
+    mov [current_color], al
+    ret
+
+hex_char_to_val:
+    cmp al, '0'
+    jl .invalid
+    cmp al, '9'
+    jle .is_digit
+    cmp al, 'A'
+    jl .invalid
+    cmp al, 'F'
+    jle .is_lower
+.invalid:
+    mov al, 0x07
+    ret
+.is_digit:
+    sub al, '0'
+    ret
+.is_lower:
+    sub al, 'A'
+    add al, 10
+    ret
+
+check_command:
+    mov si, buffer
+    mov al, [si]
+
+    cmp al, ' '
+    je .not_equal
+
+    test al, al
+    jz .not_equal
+
+    jmp .loop
+.loop:
+    mov al, [si] ; CHAR_A
+    mov bl, [di] ; CHAR_B
+
+    cmp al, ' '        ; Check if "SPACE"
+    je .equal
+
+    test al, al         ; Check if end string
+    jz .equal
+
+    cmp al, bl          ; CHARS Comparison
+    jne .not_equal      ; if CHAR_A != CHAR_B: Jump to .not_equal
+    
+    inc si
+    inc di
+    jmp .loop
+.equal:
+    mov [pointer], si
+    xor ax, ax          ; ZF=1 (AX=0)
+
+    ret
+.not_equal:
+    clc                 ; Clear the Carry
+
+    mov al, 1           ; ZF=0
+    test al, al
+    ret
+
+get_arguments:
+    mov si, [pointer]
+.skip_spaces:
+    mov al, [si]
+    cmp al, ' '
+    jne .next
+    inc si
+    jmp .skip_spaces
+.next:
+    mov di, temp_string
+.read:
+    mov al, [si]
+
+    test al, al
+    jz .done
+
+    mov [di], al
+    inc di
+    inc si
+
+    jmp .read
+.done:
+    mov byte [di], 0
+    mov [pointer], si
+    ret
+
+get_argument:
+    mov si, [pointer]
+.skip_spaces:
+    mov al, [si]
+    cmp al, ' '
+    jne .next
+    inc si
+    jmp .skip_spaces
+.next:
+    mov di, temp_string
+.read:
+    mov al, [si]
+
+    cmp al, ' '
+    je .done
+
+    test al, al
+    jz .done
+
+    mov [di], al
+    inc di
+    inc si
+
+    jmp .read
+.done:
+    mov byte [di], 0
+    mov [pointer], si
+    ret
+
+input:
+    mov di, buffer      ; DI = Buffer
+.loop:
+    mov ah, 0x00
+    int 0x16            ; AL = CHAR
+
+    cmp al, 13          ; ENTER
+    je .done
+
+    cmp al, 8           ; BACKSPACE
+    je .backspace
+
+    mov bx, di          ; BX = DI (POINTER)
+    mov [bx], al        ; Write the CHAR in Memory
+    inc di              ; di += 1 (Next CHARS)
+
+    ; Screen Echo
+    mov ah, 0x0E
+    int 0x10
+    jmp .loop
+.backspace:
+    cmp di, buffer
+    je .loop
+    dec di
+    mov byte [di], 0
+
+    mov ah, 0x0E
+    mov al, 8
+    int 0x10      ; Move the cursor to left (VIDEO INTERRUPT)
+
+    mov al, ' '
+    int 0x10      ; Delete with SPACE
+
+    mov al, 8
+    int 0x10      ; Move the cursor to left (VIDEO INTERRUPT)
+    jmp .loop
+.done:
+    mov byte [di], 0 
+
+    mov ah, 0x0E
+    mov al, 13
+    int 0x10      ; Carriage Return
+    mov al, 10
+    int 0x10      ; Line Feed
+
+    mov dl, 3
+    inc dh
+    call set_cursor_position
+
+    mov si, buffer
+    call check_commands
+.finish:
+    mov di, buffer
+    call clear_buffer
+
+    mov di, temp_string
+    call clear_buffer
+
+    ret
+
+check_commands:
+    ; Quit Command
+    mov di, QUIT_COMMAND
+    call check_command
+    jz .quit
+
+    ; Clear Command
+    mov di, CLEAR_COMMAND
+    call check_command
+    jz .clear_command
+
+    ; Shutdown Command
+    mov di, SHUTDOWN_COMMAND
+    call check_command
+    jz .shutdown
+
+    ; Print Command
+    mov di, PRINT_COMMAND
+    call check_command
+    jz .print
+
+    ; Color Command
+    mov di, COLOR_COMMAND
+    call check_command
+    jz .color
+
+    ; Editor Command
+    mov di, EDITOR_COMMAND
+    call check_command
+    jz .editor
+
+    jmp .unknown_command
+
+.quit:
+    call clear_screen
+    jmp start_screen
+.clear_command:
+    jmp shell_screen.reset_screen
+.shutdown:
+    jmp shutdown
+.print:
+    mov al, [current_color]
+    mov [color], al
+
+    call get_arguments
+    mov si, temp_string
+    call print_string
+
+    inc dh
+    call set_cursor_position
+
+    jmp shell_screen.loop
+.color:
+    call get_arguments
+    call parse_hex_byte
+
+    jmp shell_screen.loop
+.editor:
+    jmp editor_screen
+
+.unknown_command:
+    mov byte [color], 0xC
+    mov si, UNKNOWN_COMMAND
+    call print_string
+
+clear_buffer:
+    mov al, 0
+    mov cx, 32 ; Buffer's Length
+    rep stosb
+    ret
+
+get_centered_x_offset:
+    push si
+    call str_len
+    pop si
+    
+    mov ax, [columns]
+    shr ax, 1
+    
+    mov bx, cx
+    shr bx, 1
+    
+    sub ax, bx
+    mov dl, al
+    ret
+
+return_screen_dimension:
+    ; Columns
+    mov ah, 0x0F
+    int 0x10
+    movzx ax, ah ; AH extended in AX
+    mov [columns], ax
+
+    ; Rows
+    mov ax, 0x1130
+    mov bh, 0
+    int 0x10
+    mov al, dl ; DL = Rows - 1
+    inc al ; AL = DL + 1 (Rows)
+    mov [rows], ax
+
+    ret
+
+clear_screen:
+    mov ah, 0x00
+    mov al, 0x03
+    int 0x10
+    ret
+
+set_cursor_position:
+    mov ah, 0x02 ; Set cursor position
+    mov bh, 0x00 ; Video Page
+    int 0x10
+    ret
+
+set_center_x:
+    xor dx, dx
+    mov ax, [columns]
+    mov bx, 2
+    div bx
+
+    mov dl, al
+    ret
+
+set_center_string:
+    push si
+    call str_len
+    pop si
+
+    xor dx, dx
+    mov ax, cx
+    mov bx, 2
+    div bx
+
+    sub dl, al
+    ret
+
+create_line:
+    mov dl, 0
+    call set_cursor_position
+
+    jmp .iteration
+.iteration:
+    mov si, LINE
+    call print_string
+
+    inc dl
+    call set_cursor_position
+
+    cmp dl, [columns]
+    jne .iteration
+    
+    ret
+
+str_len:
+    xor cx, cx
+    push si
+.next:
+    lodsb ; Load [si] in AL and increment SI
+    cmp al, 0
+    je .done
+
+    inc cx
+    jmp .next
+.done:
+    pop si
+    ret
+
+print_string:
+    pusha
+
+    mov bh, 0x00 ; Video Page
+
+    mov al, [background_color]
+    shl al, 4
+    or al, [color]
+
+    mov bl, al
+.next:
+    lodsb ; Load the SI character in AL
+    test al, al ; Check for the final string token (0)
+    jz .done
+
+    ; Print the Character
+    mov ah, 0x09 ; Write Character and Attribute
+    mov cx, 1 ; Times of printing characters
+    int 0x10
+
+    ; Move the cursor
+    inc dl ; dl+=1
+    call set_cursor_position ; Update cursor position
+
+    jmp .next
+.done:
+    popa
+    ret
+
+shutdown:
+    ; Initializing APM Connession
+    mov ax, 0x5301
+    xor bx, bx
+    int 0x15
+
+    ; Setting power state of all devices
+    mov ax, 0x530E
+    xor bx, bx
+    mov cx, 0x0102
+    int 0x15
+
+    ; Power Off Command
+    mov ax, 0x5307
+    mov bx, 0x0001      ; All Devices
+    mov cx, 0x0003      ; State: Off
+    int 0x15
+
+    ; Shutdown Failed
+    jmp $
+
+print_title:
+    mov byte [color], 0x09
+    mov dh, 2
+
+    mov si, TITLE_1
+    call get_centered_x_offset
+    call set_cursor_position
+    call print_string
+
+    inc dh
+
+    mov si, TITLE_2
+    call get_centered_x_offset
+    call set_cursor_position
+    call print_string
+
+    inc dh
+
+    mov si, TITLE_3
+    call get_centered_x_offset
+    call set_cursor_position
+    call print_string
+
+    inc dh
+
+    mov si, TITLE_4
+    call get_centered_x_offset
+    call set_cursor_position
+    call print_string
+
+    inc dh
+
+    mov si, TITLE_5
+    call get_centered_x_offset
+    call set_cursor_position
+    call print_string
+
+    inc dh
+
+    mov si, TITLE_6
+    call get_centered_x_offset
+    call set_cursor_position
+    call print_string
+
+    ret
+
+; CONST VARIABLES ;
+SQ equ 0xDB
+
+LINE db SQ, 0
+EDITOR_LINE db '#', 0
+
+TITLE db ' [ PHI OS ] ', 0
+TITLE_1 db ' ',SQ,SQ,SQ,SQ,SQ,SQ,'   ',SQ,'     ',SQ,'   ',SQ,'      ',SQ,SQ,SQ,SQ,SQ,SQ,'  ',SQ,SQ,SQ,SQ,SQ,SQ, 0
+TITLE_2 db ' ',SQ,'    ',SQ,'   ',SQ,'     ',SQ,'   ',SQ,'      ',SQ,'    ',SQ,'  ',SQ,'     ', 0
+TITLE_3 db ' ',SQ,'    ',SQ,'   ',SQ,SQ,SQ,SQ,SQ,SQ,SQ,'   ',SQ,'      ',SQ,'    ',SQ,'  ',SQ,'     ', 0
+TITLE_4 db ' ',SQ,SQ,SQ,SQ,SQ,SQ,'   ',SQ,'     ',SQ,'   ',SQ,'      ',SQ,'    ',SQ,'  ',SQ,SQ,SQ,SQ,SQ,SQ, 0
+TITLE_5 db ' ',SQ,'        ',SQ,'     ',SQ,'   ',SQ,'      ',SQ,'    ',SQ,'       ',SQ,'', 0
+TITLE_6 db ' ',SQ,'        ',SQ,'     ',SQ,'   ',SQ,'      ',SQ,SQ,SQ,SQ,SQ,SQ,'  ',SQ,SQ,SQ,SQ,SQ,SQ, 0
+
+WELCOME db 'Welcome in PHI OS!', 0
+START db 'Press any key to enter workspace...', 0
+
+SHELL db '[ WORKSPACE ] ', 0
+EDITOR db '  [ EDITOR ] ', 0
+COMMAND_INPUT db '>> ', 0
+
+QUIT_COMMAND db 'quit', 0
+CLEAR_COMMAND db 'clear', 0
+SHUTDOWN_COMMAND db 'shutdown', 0
+PRINT_COMMAND db 'print', 0
+COLOR_COMMAND db 'color', 0
+EDITOR_COMMAND db 'editor', 0
+UNKNOWN_COMMAND db 'Unknown Command.', 0
