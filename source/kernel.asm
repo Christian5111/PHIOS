@@ -15,9 +15,12 @@ pointer dw 0
 COLOR_BLACK equ 0x00
 COLOR_BLUE equ 0x01
 COLOR_GREEN equ 0x02
+COLOR_CYAN equ 0x03
 COLOR_YELLOW equ 0x0E
 COLOR_WHITE equ 0x0F
 COLOR_GRAY equ 0x07
+COLOR_DARK_GRAY equ 0x08
+COLOR_LIGHT_BLUE equ 0X09
 
 temp_string: times 32 db 0
 buffer: times 32 db 0
@@ -59,6 +62,12 @@ start_screen:
     call set_cursor_position
     call print_string
 
+    mov byte [color], COLOR_DARK_GRAY
+    mov dh, 13
+    call create_line
+    mov dh, 17
+    call create_line
+    mov byte [color], COLOR_GRAY
 
     mov dh, 15
 
@@ -66,7 +75,7 @@ start_screen:
     call get_centered_x_offset
 
     call set_cursor_position
-    mov byte [color], 0x03
+    mov byte [color], COLOR_CYAN
     call print_string
 
     mov ah, 0x00
@@ -569,6 +578,11 @@ check_commands:
     call check_command
     jz .editor
 
+    ; Cool Shutdown Command
+    mov di, COOL_SHUTDOWN_COMMAND
+    call check_command
+    jz .shutdown
+
     jmp .unknown_command
 
 .quit:
@@ -816,7 +830,7 @@ TITLE_4 db ' ',SQ,SQ,SQ,SQ,SQ,SQ,'   ',SQ,'     ',SQ,'   ',SQ,'      ',SQ,'    '
 TITLE_5 db ' ',SQ,'        ',SQ,'     ',SQ,'   ',SQ,'      ',SQ,'    ',SQ,'       ',SQ,'', 0
 TITLE_6 db ' ',SQ,'        ',SQ,'     ',SQ,'   ',SQ,'      ',SQ,SQ,SQ,SQ,SQ,SQ,'  ',SQ,SQ,SQ,SQ,SQ,SQ, 0
 
-WELCOME db 'Welcome in PHI OS!', 0
+WELCOME db 'Welcome User!', 0
 START db 'Press any key to enter workspace...', 0
 
 SHELL db '[ WORKSPACE ] ', 0
@@ -830,3 +844,5 @@ PRINT_COMMAND db 'print', 0
 COLOR_COMMAND db 'color', 0
 EDITOR_COMMAND db 'editor', 0
 UNKNOWN_COMMAND db 'Unknown Command.', 0
+
+COOL_SHUTDOWN_COMMAND db 'asdfghjkl',0x3B,0x27, 0

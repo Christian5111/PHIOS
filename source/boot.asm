@@ -2,40 +2,40 @@ BITS 16
 ORG 0x7C00
 
 start:
-    ; salva il drive da cui siamo partiti (BIOS lo mette in DL)
+    ; Save Boot Drive
     mov [BOOT_DRIVE], dl
 
-    ; setup segmenti e stack
+    ; Segments and Stack Setup
     xor ax, ax
     mov ds, ax
     mov es, ax
     mov ss, ax
     mov sp, 0x9000
 
-    ; pulisci schermo / modalità testo
+    ; Clear Screen and set Text Mode
     mov ah, 0x00
     mov al, 0x03
     int 0x10
 
-    ; stampa messaggio
+    ; Print Message
     mov si, msg
     call print_string
 
-    ; 5. Caricamento Kernel
+    ; Load Kernel
     mov ax, 0x0000
     mov es, ax
-    mov bx, 0x7E00        ; Destinazione: 0x7E00
+    mov bx, 0x7E00 ; Destination: 0x7E00
 
     mov ah, 0x02
-    mov al, 5            ; Leggiamo 5 settori per sicurezza
+    mov al, 5 ; Read 5 Sectors
     mov ch, 0
     mov dh, 0
-    mov cl, 2             ; Il kernel inizia al settore 2
+    mov cl, 2 ; Load Kernel at Sector 2
     mov dl, [BOOT_DRIVE]
     int 0x13
     jc disk_error
 
-    ; 6. Salto al Kernel
+    ; Jump to Kernel
     jmp 0x0000:0x7E00
 
 .print:
@@ -55,7 +55,7 @@ disk_error:
     jz .halt
     mov ah, 0x0E
     mov bh, 0x00
-    mov bl, 0x0C          ; rosso
+    mov bl, 0x0C
     int 0x10
     jmp .err_loop
 
