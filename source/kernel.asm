@@ -1,15 +1,20 @@
 BITS 16
 ORG 0x7E00
 
+jmp start_kernel
+
 ; VARIABLES ;
+ALIGN 2
 rows dw 0
 columns dw 0
 color db 0
 color_data db 0x00
 background_color db 0
-current_color db 0x07
 current_page dw 0
-pointer dw 0
+
+calculated_color db 0x00
+print_color db 0x07
+print_background_color db 0x00
 
 ; COLORS ;
 COLOR_BLACK equ 0x00
@@ -22,7 +27,7 @@ COLOR_GRAY equ 0x07
 COLOR_DARK_GRAY equ 0x08
 COLOR_LIGHT_BLUE equ 0X09
 
-temp_string: times 32 db 0
+ALIGN 2
 buffer: times 32 db 0
 
 start_kernel:
@@ -34,7 +39,6 @@ start_kernel:
     call clear_screen
     
     jmp start_screen
-
 
 ; PAGES ;
 start_screen:
@@ -103,10 +107,10 @@ shell_screen:
     call input
 
     add dh, 1
-
     cmp dh, 23
     jg .reset_screen
 
+    mov dl, 3
     call set_cursor_position
 
     jmp .loop
@@ -114,11 +118,13 @@ shell_screen:
     mov ax, SHELL
     mov [current_page], ax
 
-    call clear_screen
+    mov al, 5
+    call scroll_up
+
     call top_bar
-    mov dh, 2
+
+    sub dh, 5
     mov dl, 3
-    call set_cursor_position
     jmp .loop
 
 top_bar:
@@ -284,13 +290,6 @@ editor_screen:
     ret
 
 ; FUNCTIONS ;
-get_cursor_position:
-    mov ah, 0x03
-    mov bh, 0
-    int 0x10
-
-    ret
-
 print_numbers:
     pusha
 
@@ -309,7 +308,7 @@ print_numbers:
     test ax, ax
     jnz .divide_loop
 .print_loop:
-    pop ax     ; DX = Digit
+    pop ax ; DX = Digit
     add al, '0' ; Convert to ASCII
 
     push cx
@@ -343,34 +342,10 @@ print_numbers:
     popa
     ret
 
-check_string:
-.loop:
-    mov al, [si] ; CHAR_A
-    mov bl, [di] ; CHAR_B
-
-    cmp al, bl          ; CHARS Comparison
-    jne .not_equal      ; if CHAR_A != CHAR_B: Jump to .not_equal
-
-    test al, al         ; Check if end string
-    jz .equal
-    
-    inc si
-    inc di
-    jmp .loop
-.equal:
-    xor ax, ax          ; ZF=1 (AX=0)
-    ret
-.not_equal:
-    clc                 ; Clear the Carry
-        
-    mov al, 1       ; ZF=0
-    test al, al
-    ret
-
 parse_hex_byte:
-    mov al, [temp_string]
+    mov al, [si]
     call hex_char_to_val
-    mov [current_color], al
+    mov [calculated_color], al
     ret
 
 hex_char_to_val:
@@ -391,160 +366,6 @@ hex_char_to_val:
 .is_lower:
     sub al, 'A'
     add al, 10
-    ret
-
-check_command:
-    mov si, buffer
-    mov al, [si]
-
-    cmp al, ' '
-    je .not_equal
-
-    test al, al
-    jz .not_equal
-
-    jmp .loop
-.loop:
-    mov al, [si] ; CHAR_A
-    mov bl, [di] ; CHAR_B
-
-    cmp al, ' '        ; Check if "SPACE"
-    je .equal
-
-    test al, al         ; Check if end string
-    jz .equal
-
-    cmp al, bl          ; CHARS Comparison
-    jne .not_equal      ; if CHAR_A != CHAR_B: Jump to .not_equal
-    
-    inc si
-    inc di
-    jmp .loop
-.equal:
-    mov [pointer], si
-    xor ax, ax          ; ZF=1 (AX=0)
-
-    ret
-.not_equal:
-    clc                 ; Clear the Carry
-
-    mov al, 1           ; ZF=0
-    test al, al
-    ret
-
-get_arguments:
-    mov si, [pointer]
-.skip_spaces:
-    mov al, [si]
-    cmp al, ' '
-    jne .next
-    inc si
-    jmp .skip_spaces
-.next:
-    mov di, temp_string
-.read:
-    mov al, [si]
-
-    test al, al
-    jz .done
-
-    mov [di], al
-    inc di
-    inc si
-
-    jmp .read
-.done:
-    mov byte [di], 0
-    mov [pointer], si
-    ret
-
-get_argument:
-    mov si, [pointer]
-.skip_spaces:
-    mov al, [si]
-    cmp al, ' '
-    jne .next
-    inc si
-    jmp .skip_spaces
-.next:
-    mov di, temp_string
-.read:
-    mov al, [si]
-
-    cmp al, ' '
-    je .done
-
-    test al, al
-    jz .done
-
-    mov [di], al
-    inc di
-    inc si
-
-    jmp .read
-.done:
-    mov byte [di], 0
-    mov [pointer], si
-    ret
-
-input:
-    mov di, buffer      ; DI = Buffer
-.loop:
-    mov ah, 0x00
-    int 0x16            ; AL = CHAR
-
-    cmp al, 13          ; ENTER
-    je .done
-
-    cmp al, 8           ; BACKSPACE
-    je .backspace
-
-    mov bx, di          ; BX = DI (POINTER)
-    mov [bx], al        ; Write the CHAR in Memory
-    inc di              ; di += 1 (Next CHARS)
-
-    ; Screen Echo
-    mov ah, 0x0E
-    int 0x10
-    jmp .loop
-.backspace:
-    cmp di, buffer
-    je .loop
-    dec di
-    mov byte [di], 0
-
-    mov ah, 0x0E
-    mov al, 8
-    int 0x10      ; Move the cursor to left (VIDEO INTERRUPT)
-
-    mov al, ' '
-    int 0x10      ; Delete with SPACE
-
-    mov al, 8
-    int 0x10      ; Move the cursor to left (VIDEO INTERRUPT)
-    jmp .loop
-.done:
-    mov byte [di], 0 
-
-    mov ah, 0x0E
-    mov al, 13
-    int 0x10      ; Carriage Return
-    mov al, 10
-    int 0x10      ; Line Feed
-
-    mov dl, 3
-    inc dh
-    call set_cursor_position
-
-    mov si, buffer
-    call check_commands
-.finish:
-    mov di, buffer
-    call clear_buffer
-
-    mov di, temp_string
-    call clear_buffer
-
     ret
 
 check_commands:
@@ -574,9 +395,14 @@ check_commands:
     jz .color
 
     ; Editor Command
-    mov di, EDITOR_COMMAND
+    ; mov di, EDITOR_COMMAND
+    ; call check_command
+    ; jz .editor
+
+    ; PHI Command
+    mov di, PHI_COMMAND
     call check_command
-    jz .editor
+    jz PHI_Command
 
     ; Cool Shutdown Command
     mov di, COOL_SHUTDOWN_COMMAND
@@ -584,20 +410,21 @@ check_commands:
     jz .shutdown
 
     jmp .unknown_command
-
 .quit:
     call clear_screen
     jmp start_screen
 .clear_command:
-    jmp shell_screen.reset_screen
+    call clear_screen
+    jmp shell_screen
 .shutdown:
     jmp shutdown
 .print:
-    mov al, [current_color]
+    mov al, [print_color]
     mov [color], al
 
-    call get_arguments
-    mov si, temp_string
+    call get_next_argument
+
+    mov si, [pointer]
     call print_string
 
     inc dh
@@ -605,89 +432,55 @@ check_commands:
 
     jmp shell_screen.loop
 .color:
-    call get_arguments
+    call get_next_argument
+
+    mov si, [pointer]
     call parse_hex_byte
+
+    mov al, [calculated_color]
+    mov [print_color], al
 
     jmp shell_screen.loop
 .editor:
     jmp editor_screen
-
 .unknown_command:
     mov byte [color], 0xC
     mov si, UNKNOWN_COMMAND
     call print_string
-
-clear_buffer:
-    mov al, 0
-    mov cx, 32 ; Buffer's Length
-    rep stosb
     ret
 
-get_centered_x_offset:
-    push si
-    call str_len
-    pop si
-    
-    mov ax, [columns]
-    shr ax, 1
-    
-    mov bx, cx
-    shr bx, 1
-    
-    sub ax, bx
-    mov dl, al
-    ret
+PHI_Command:
+    call print_title
+    mov dl, 0x00
+    mov dh, 0x00
 
-return_screen_dimension:
-    ; Columns
-    mov ah, 0x0F
-    int 0x10
-    movzx ax, ah ; AH extended in AX
-    mov [columns], ax
+    jmp .color_1
+.color_1:
+    mov byte [color], COLOR_LIGHT_BLUE
+    jmp .loop
+.color_2:
+    mov byte [color], COLOR_CYAN
+    jmp .loop
+.loop:
+    call set_cursor_position
+    inc dl
+    inc dh
 
-    ; Rows
-    mov ax, 0x1130
-    mov bh, 0
-    int 0x10
-    mov al, dl ; DL = Rows - 1
-    inc al ; AL = DL + 1 (Rows)
-    mov [rows], ax
+    mov si, PHI_STRING
+    call print_string
 
-    ret
+    cmp dh, [columns]
+    je .next
 
-clear_screen:
-    mov ah, 0x00
-    mov al, 0x03
-    int 0x10
-    ret
+    jmp .loop
+.next:
+    inc dl
+    mov dh, 0x00
 
-set_cursor_position:
-    mov ah, 0x02 ; Set cursor position
-    mov bh, 0x00 ; Video Page
-    int 0x10
-    ret
+    cmp byte [color], COLOR_LIGHT_BLUE
+    je .color_2
 
-set_center_x:
-    xor dx, dx
-    mov ax, [columns]
-    mov bx, 2
-    div bx
-
-    mov dl, al
-    ret
-
-set_center_string:
-    push si
-    call str_len
-    pop si
-
-    xor dx, dx
-    mov ax, cx
-    mov bx, 2
-    div bx
-
-    sub dl, al
-    ret
+    jmp .color_1
 
 create_line:
     mov dl, 0
@@ -704,49 +497,6 @@ create_line:
     cmp dl, [columns]
     jne .iteration
     
-    ret
-
-str_len:
-    xor cx, cx
-    push si
-.next:
-    lodsb ; Load [si] in AL and increment SI
-    cmp al, 0
-    je .done
-
-    inc cx
-    jmp .next
-.done:
-    pop si
-    ret
-
-print_string:
-    pusha
-
-    mov bh, 0x00 ; Video Page
-
-    mov al, [background_color]
-    shl al, 4
-    or al, [color]
-
-    mov bl, al
-.next:
-    lodsb ; Load the SI character in AL
-    test al, al ; Check for the final string token (0)
-    jz .done
-
-    ; Print the Character
-    mov ah, 0x09 ; Write Character and Attribute
-    mov cx, 1 ; Times of printing characters
-    int 0x10
-
-    ; Move the cursor
-    inc dl ; dl+=1
-    call set_cursor_position ; Update cursor position
-
-    jmp .next
-.done:
-    popa
     ret
 
 shutdown:
@@ -816,11 +566,19 @@ print_title:
 
     ret
 
+; INCLUDE DRIVERS ;
+%include "drivers/video.asm"
+%include "drivers/keyboard.asm"
+
+; INCLUDE LOGIC ;
+%include "logic/string.asm"
+
 ; CONST VARIABLES ;
 SQ equ 0xDB
 
 LINE db SQ, 0
 EDITOR_LINE db '#', 0
+PHI_STRING db '1.6180339', 0
 
 TITLE db ' [ PHI OS ] ', 0
 TITLE_1 db ' ',SQ,SQ,SQ,SQ,SQ,SQ,'   ',SQ,'     ',SQ,'   ',SQ,'      ',SQ,SQ,SQ,SQ,SQ,SQ,'  ',SQ,SQ,SQ,SQ,SQ,SQ, 0
@@ -842,6 +600,7 @@ CLEAR_COMMAND db 'clear', 0
 SHUTDOWN_COMMAND db 'shutdown', 0
 PRINT_COMMAND db 'print', 0
 COLOR_COMMAND db 'color', 0
+PHI_COMMAND db 'phi', 0
 EDITOR_COMMAND db 'editor', 0
 UNKNOWN_COMMAND db 'Unknown Command.', 0
 
