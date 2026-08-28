@@ -9,7 +9,7 @@ rows dw 0
 columns dw 0
 color db 0
 color_data db 0x00
-background_color db 0
+background_color db 0 
 current_page dw 0
 
 calculated_color db 0x00
